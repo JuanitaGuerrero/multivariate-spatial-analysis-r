@@ -1,0 +1,313 @@
+---
+title: ""
+author: ""
+date: ""
+
+output:
+  pdf_document:
+    toc: false
+    number_sections: false
+    latex_engine: xelatex
+
+header-includes:
+  - \usepackage{geometry}
+  - \geometry{margin=2.5cm}
+---
+
+\begin{center}
+
+\vspace{1cm}
+
+{\Huge \textbf{Taller 4}}
+
+\vspace{0.3cm}
+
+{\Large Biología Cuantitativa}
+
+\vspace{1cm}
+
+\end{center}
+
+\noindent
+\textbf{Grupo 6:} Juanita Guerrero \& María José Camacho
+\hfill
+`r {
+  meses <- c('enero','febrero','marzo','abril','mayo','junio',
+             'julio','agosto','septiembre','octubre','noviembre','diciembre')
+  hoy <- Sys.Date()
+  paste(as.numeric(format(hoy, '%d')),
+        'de',
+        meses[as.numeric(format(hoy, '%m'))],
+        'de',
+        format(hoy, '%Y'))
+}`
+
+\vspace{-1.5em}
+\noindent\rule{\textwidth}{0.4pt}
+\vspace{-0.3em}
+
+\begingroup
+\renewcommand{\contentsname}{}
+\tableofcontents
+\endgroup
+
+\newpage
+
+# Sección 1 - Análisis de Componentes Principales (PCA)
+
+\vspace{-2em}
+\noindent\rule{\textwidth}{0.4pt}
+\vspace{-0.3em}
+
+## Ejercicio 1
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+spotify = read.csv("spotify.csv")
+spotify = na.omit(spotify)
+
+# Numéricas
+spotify_num = select_if(spotify, is.numeric)
+
+# Para sacar las medias
+n = nrow(spotify_num)
+spotify_means = colMeans(spotify_num)
+spotify_sds = apply(spotify_num,2, FUN ="sd")
+resta = sweep(spotify_num, 2, spotify_means, "-")
+Z = sweep(resta, 2, spotify_sds, "/")
+Z = as.matrix(Z)
+traspuesta = t(Z)
+
+matriz_cov = (traspuesta %*% Z) / (n-1)
+```
+
+## Ejercicio 2
+
+```{r}
+# Autovalores
+
+eigen = eigen(matriz_cov)
+eigenvalues = eigen$values
+eigenvectors = eigen$vectors
+
+rownames(eigenvectors) = colnames(Z)
+colnames(eigenvectors) = paste0("PC", 1:ncol(Z))
+
+var_tot = sum(eigenvalues)
+
+prop_var = eigenvalues / var_tot * 100
+cum_var = cumsum(prop_var)
+
+summary_var = data.frame(
+  Autovalor = eigenvalues,
+  Proporcion = prop_var,
+  Acumulada = cum_var,
+  row.names = paste0("PC", 1:ncol(Z))
+)
+
+# Matriz de Scores
+
+scores = Z %*% eigenvectors
+
+# Matriz de contribuciones porcentuales
+
+aporte = eigenvectors^2 * 100
+```
+
+## Ejercicio 3
+
+```{r}
+# Función R
+pca = prcomp(spotify_num, scale. = TRUE)
+
+# Comparación autovectores
+round(eigenvectors[, 1:2], 2)
+round(pca$rotation[, 1:2], 2)
+```
+
+Los autovectores obtenidos manualmente coinciden con los obtenidos mediante `prcomp()`, confirmando el cálculo del PCA.
+
+```{r}
+# Comparación scores
+head(scores)
+head(pca$x)
+```
+
+Los scores obtenidos manualmente coinciden con los obtenidos mediante `prcomp()`. En algunos componentes se observa un cambio de signo, lo cual no afecta los resultados del PCA.
+
+```{r}
+# % varianza explicada
+varianza_pca = pca$sdev^2 / sum(pca$sdev^2) * 100
+
+# Comparación varianza explicada
+head(prop_var)
+head(varianza_pca)
+```
+
+La varianza explicada obtenida manualmente coincide con la obtenida mediante `prcomp()`.
+
+```{r, warning=FALSE, message=FALSE, fig.align='center'}
+# Biplot
+library(factoextra)
+
+fviz_pca_biplot(
+  pca,
+  habillage = spotify$playlist_genre,
+  addEllipses = TRUE,
+  ellipse.level = 0.95,
+  label = "var",
+  repel = TRUE,
+  alpha.ind = 0.3,
+  col.var = "black",
+  title = "PCA de las características musicales por género",
+  xlab = "PC1",
+  ylab = "PC2"
+) +
+  scale_color_manual(
+    values = c(
+      "#edf8b1", "#7fcdbb", "#2c7fb8",
+      "#28348e", "#41b6c4", "#225ea8"
+    )
+  )
+```
+
+PC1 separa principalmente las canciones asociadas con mayor `energy` y `loudness` de aquellas con mayor `acousticness`. En PC2, `danceability` y `valence` se encuentran en dirección opuesta a `instrumentalness` y `duration_ms`. Además, `energy` y `loudness` presentan una relación positiva, mientras que `acousticness` se relaciona negativamente con ellas. Los géneros se encuentran bastante mezclados en el gráfico, aunque EDM tiende a ubicarse más hacia el lado positivo de PC1 y PC2. En general, no hay una separación clara entre los géneros.
+
+# Sección 2 - Agrupamiento Espacial y Algoritmos de Clustering
+
+\vspace{-2em}
+\noindent\rule{\textwidth}{0.4pt}
+\vspace{-0.3em}
+
+## Ejercicio 4
+
+```{r, warning=FALSE, message=FALSE}
+library(geodata)
+library(sf)
+
+# Carga municipios
+col = gadm(country = "Col", level = 2, path = "datos")
+
+# Convertir sf
+col = st_as_sf(col)
+
+# Centroides
+centroides = st_centroid(col)
+
+# Matriz coord
+coord = st_coordinates(centroides)
+head(coord)
+
+```
+
+## Ejercicio 5
+
+```{r, warning=FALSE, message=FALSE}
+set.seed(1234)
+K = 4
+
+# Centroides iniciales
+centroides2 = coord[
+  sample(1:nrow(coord), K),
+  ,
+  drop = FALSE
+]
+
+for (iter in 1:200) {
+  
+  # Distancias euclidianas
+  distancias = outer(
+    rowSums(coord^2),
+    rowSums(centroides2^2),
+    "+"
+  ) - 2 * coord %*% t(centroides2)
+  
+  # Centroide + cercano
+  # max.col busca el valor más grande, se pone negativo para buscar el mín
+  agrupar = max.col(-distancias)
+  
+  # Promedio centroides
+  centroides3 = aggregate(
+    coord,
+    by = list(grupo = agrupar),
+    FUN = mean
+  )
+  
+  # Quitar columna extra aggregate
+  centroides3 = as.matrix(centroides3[, -1])
+  
+  # Cálculo 2.0
+  distancias2 = outer(
+    rowSums(coord^2),
+    rowSums(centroides3^2),
+    "+"
+  ) - 2 * coord %*% t(centroides3)
+  
+  agrupar2 = max.col(-distancias2)
+  
+  # Convergencia
+  if (all(agrupar2 == agrupar)) {
+  
+  centroides2 = centroides3
+  agrupar = agrupar2
+  
+  cat("Iteración:", iter, "\n")
+  
+  break
+  
+  # Si no converge
+  } else {
+  
+  centroides2 = centroides3
+  
+}
+}
+```
+
+## Ejercicio 6
+
+```{r, warning=FALSE, message=FALSE, fig.align='center'}
+library(ggplot2)
+
+# Matriz coord a sf
+coord_sf = st_as_sf(
+  data.frame(coord, cluster = agrupar),
+  coords = c("X", "Y"),
+  crs = st_crs(col)
+)
+
+scores = as.data.frame(pca$x[, 1:2])
+scores$Severity = factor(accidentes$Severity)
+
+ggplot(scores, aes(PC1, PC2, color = Severity)) +
+  geom_point(alpha = 0.5) +
+  scale_color_manual(
+    values = c("#edf8b1", "#7fcdbb", "#2c7fb8", "#28348e")
+  ) +
+  labs(
+    title = "Distribución de los accidentes según su severidad",
+    color = "Severity",
+    x = "PC1",
+    y = "PC2"
+  ) +
+  theme_classic() +
+  theme(
+    panel.border = element_rect(fill = NA),
+    axis.ticks = element_line()
+  )
+
+```
+
+Se observan cuatro grupos con una distribución espacial diferente. El cluster 1 se concentra principalmente en el norte del país, el cluster 2 en la zona central y oriental, y el cluster 3 en el sur y suroccidente. El cluster 4 agrupa principalmente a San Andrés y Providencia, que se encuentran más alejados del resto de los municipios.
+
+```{r, warning=FALSE, message=FALSE}
+# Comparación función R
+set.seed(1234)
+kmeans_r = kmeans(coord, centers = 4, iter.max=1000)
+table(agrupar, kmeans_r$cluster)
+
+kmeans_r = kmeans(coord, centers = centroides2, algorithm = "Lloyd", iter.max = 200)
+table(agrupar, kmeans_r$cluster)
+```
+
+Con centroides iniciales aleatorios, `kmeans()` produce una agrupación ligeramente diferente a la obtenida manualmente, con 3 municipios asignados de manera distinta. Esto puede deberse tanto a la elección de centroides iniciales diferentes como a que `kmeans()` utiliza por defecto el algoritmo Hartigan-Wong, mientras que nuestra implementación manual utiliza el algoritmo de Lloyd. Al utilizar los mismos centroides iniciales y el algoritmo de Lloyd, ambas implementaciones obtienen exactamente la misma agrupación.
